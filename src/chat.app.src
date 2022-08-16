@@ -1,0 +1,16 @@
+{application, chat,
+ [{description, "An Overworld application"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {chat_app, []}},
+  {applications,
+   [kernel,
+    overworld,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {licenses, ["Apache 2.0"]},
+  {links, []}
+ ]}.
