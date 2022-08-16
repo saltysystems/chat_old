@@ -100,4 +100,5 @@ handle_tick(_Players, State = []) ->
 handle_tick(_Players, State) ->
     % Empty the buffer after sending it to everyone.
     State1 = [],
-    {ok, {'@zone', {state_transfer, State}}, State1}.
+    Reply = {'@zone', {state_transfer, State}},
+    {ok, Reply, State1}.
