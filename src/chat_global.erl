@@ -33,23 +33,23 @@ rpc_info() ->
         #{
             opcode => ?CHAT_JOIN,
             c2s_handler => {?MODULE, join, 2},
-            encode => chat_pb
+            encoder => chat_pb
         },
         #{
             opcode => ?CHAT_PART,
             c2s_handler => {?MODULE, part, 1},
-            encode => chat_pb
+            encoder => chat_pb
         },
         #{
             opcode => ?CHAT_SEND,
             c2s_handler => {?MODULE, send, 2},
             c2s_proto => chat_msg,
-            encode => chat_pb
+            encoder => chat_pb
         },
         #{
             opcode => ?CHAT_XFER,
             s2c_call => state_transfer,
-            encode => chat_pb
+            encoder => chat_pb
         }
     ].
 

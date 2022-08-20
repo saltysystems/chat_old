@@ -54,6 +54,10 @@
       #{handle                  := iodata()         % = 1
        }.
 
+-type part() ::
+      #{handle                  := iodata()         % = 1
+       }.
+
 -type chat_msg() ::
       #{text                    := iodata()         % = 1
        }.
@@ -62,13 +66,13 @@
       #{msgs                    => [chat_msg()]     % = 1
        }.
 
--export_type(['join'/0, 'chat_msg'/0, 'state_transfer'/0]).
+-export_type(['join'/0, 'part'/0, 'chat_msg'/0, 'state_transfer'/0]).
 
--spec encode_msg(join() | chat_msg() | state_transfer(), atom()) -> binary().
+-spec encode_msg(join() | part() | chat_msg() | state_transfer(), atom()) -> binary().
 encode_msg(Msg, MsgName) when is_atom(MsgName) ->
     encode_msg(Msg, MsgName, []).
 
--spec encode_msg(join() | chat_msg() | state_transfer(), atom(), list()) -> binary().
+-spec encode_msg(join() | part() | chat_msg() | state_transfer(), atom(), list()) -> binary().
 encode_msg(Msg, MsgName, Opts) ->
     case proplists:get_bool(verify, Opts) of
         true -> verify_msg(Msg, MsgName, Opts);
@@ -78,6 +82,8 @@ encode_msg(Msg, MsgName, Opts) ->
     case MsgName of
         join ->
             encode_msg_join(id(Msg, TrUserData), TrUserData);
+        part ->
+            encode_msg_part(id(Msg, TrUserData), TrUserData);
         chat_msg ->
             encode_msg_chat_msg(id(Msg, TrUserData), TrUserData);
         state_transfer ->
@@ -91,6 +97,16 @@ encode_msg_join(Msg, TrUserData) ->
 
 
 encode_msg_join(#{handle := F1}, Bin, TrUserData) ->
+    begin
+        TrF1 = id(F1, TrUserData),
+        e_type_string(TrF1, <<Bin/binary, 10>>, TrUserData)
+    end.
+
+encode_msg_part(Msg, TrUserData) ->
+    encode_msg_part(Msg, <<>>, TrUserData).
+
+
+encode_msg_part(#{handle := F1}, Bin, TrUserData) ->
     begin
         TrF1 = id(F1, TrUserData),
         e_type_string(TrF1, <<Bin/binary, 10>>, TrUserData)
@@ -253,6 +269,8 @@ decode_msg_1_catch(Bin, MsgName, TrUserData) ->
 
 decode_msg_2_doit(join, Bin, TrUserData) ->
     id(decode_msg_join(Bin, TrUserData), TrUserData);
+decode_msg_2_doit(part, Bin, TrUserData) ->
+    id(decode_msg_part(Bin, TrUserData), TrUserData);
 decode_msg_2_doit(chat_msg, Bin, TrUserData) ->
     id(decode_msg_chat_msg(Bin, TrUserData), TrUserData);
 decode_msg_2_doit(state_transfer, Bin, TrUserData) ->
@@ -363,6 +381,109 @@ skip_32_join(<<_:32, Rest/binary>>, Z1, Z2, F@_1,
 skip_64_join(<<_:64, Rest/binary>>, Z1, Z2, F@_1,
              TrUserData) ->
     dfp_read_field_def_join(Rest, Z1, Z2, F@_1, TrUserData).
+
+decode_msg_part(Bin, TrUserData) ->
+    dfp_read_field_def_part(Bin,
+                            0,
+                            0,
+                            id('$undef', TrUserData),
+                            TrUserData).
+
+dfp_read_field_def_part(<<10, Rest/binary>>, Z1, Z2,
+                        F@_1, TrUserData) ->
+    d_field_part_handle(Rest, Z1, Z2, F@_1, TrUserData);
+dfp_read_field_def_part(<<>>, 0, 0, F@_1, _) ->
+    #{handle => F@_1};
+dfp_read_field_def_part(Other, Z1, Z2, F@_1,
+                        TrUserData) ->
+    dg_read_field_def_part(Other, Z1, Z2, F@_1, TrUserData).
+
+dg_read_field_def_part(<<1:1, X:7, Rest/binary>>, N,
+                       Acc, F@_1, TrUserData)
+    when N < 32 - 7 ->
+    dg_read_field_def_part(Rest,
+                           N + 7,
+                           X bsl N + Acc,
+                           F@_1,
+                           TrUserData);
+dg_read_field_def_part(<<0:1, X:7, Rest/binary>>, N,
+                       Acc, F@_1, TrUserData) ->
+    Key = X bsl N + Acc,
+    case Key of
+        10 -> d_field_part_handle(Rest, 0, 0, F@_1, TrUserData);
+        _ ->
+            case Key band 7 of
+                0 -> skip_varint_part(Rest, 0, 0, F@_1, TrUserData);
+                1 -> skip_64_part(Rest, 0, 0, F@_1, TrUserData);
+                2 ->
+                    skip_length_delimited_part(Rest,
+                                               0,
+                                               0,
+                                               F@_1,
+                                               TrUserData);
+                3 ->
+                    skip_group_part(Rest, Key bsr 3, 0, F@_1, TrUserData);
+                5 -> skip_32_part(Rest, 0, 0, F@_1, TrUserData)
+            end
+    end;
+dg_read_field_def_part(<<>>, 0, 0, F@_1, _) ->
+    #{handle => F@_1}.
+
+d_field_part_handle(<<1:1, X:7, Rest/binary>>, N, Acc,
+                    F@_1, TrUserData)
+    when N < 57 ->
+    d_field_part_handle(Rest,
+                        N + 7,
+                        X bsl N + Acc,
+                        F@_1,
+                        TrUserData);
+d_field_part_handle(<<0:1, X:7, Rest/binary>>, N, Acc,
+                    _, TrUserData) ->
+    {NewFValue, RestF} = begin
+                             Len = X bsl N + Acc,
+                             <<Utf8:Len/binary, Rest2/binary>> = Rest,
+                             {id(unicode:characters_to_list(Utf8, unicode),
+                                 TrUserData),
+                              Rest2}
+                         end,
+    dfp_read_field_def_part(RestF,
+                            0,
+                            0,
+                            NewFValue,
+                            TrUserData).
+
+skip_varint_part(<<1:1, _:7, Rest/binary>>, Z1, Z2,
+                 F@_1, TrUserData) ->
+    skip_varint_part(Rest, Z1, Z2, F@_1, TrUserData);
+skip_varint_part(<<0:1, _:7, Rest/binary>>, Z1, Z2,
+                 F@_1, TrUserData) ->
+    dfp_read_field_def_part(Rest, Z1, Z2, F@_1, TrUserData).
+
+skip_length_delimited_part(<<1:1, X:7, Rest/binary>>, N,
+                           Acc, F@_1, TrUserData)
+    when N < 57 ->
+    skip_length_delimited_part(Rest,
+                               N + 7,
+                               X bsl N + Acc,
+                               F@_1,
+                               TrUserData);
+skip_length_delimited_part(<<0:1, X:7, Rest/binary>>, N,
+                           Acc, F@_1, TrUserData) ->
+    Length = X bsl N + Acc,
+    <<_:Length/binary, Rest2/binary>> = Rest,
+    dfp_read_field_def_part(Rest2, 0, 0, F@_1, TrUserData).
+
+skip_group_part(Bin, FNum, Z2, F@_1, TrUserData) ->
+    {_, Rest} = read_group(Bin, FNum),
+    dfp_read_field_def_part(Rest, 0, Z2, F@_1, TrUserData).
+
+skip_32_part(<<_:32, Rest/binary>>, Z1, Z2, F@_1,
+             TrUserData) ->
+    dfp_read_field_def_part(Rest, Z1, Z2, F@_1, TrUserData).
+
+skip_64_part(<<_:64, Rest/binary>>, Z1, Z2, F@_1,
+             TrUserData) ->
+    dfp_read_field_def_part(Rest, Z1, Z2, F@_1, TrUserData).
 
 decode_msg_chat_msg(Bin, TrUserData) ->
     dfp_read_field_def_chat_msg(Bin,
@@ -727,6 +848,7 @@ merge_msgs(Prev, New, MsgName, Opts) ->
     TrUserData = proplists:get_value(user_data, Opts),
     case MsgName of
         join -> merge_msg_join(Prev, New, TrUserData);
+        part -> merge_msg_part(Prev, New, TrUserData);
         chat_msg -> merge_msg_chat_msg(Prev, New, TrUserData);
         state_transfer ->
             merge_msg_state_transfer(Prev, New, TrUserData)
@@ -734,6 +856,10 @@ merge_msgs(Prev, New, MsgName, Opts) ->
 
 -compile({nowarn_unused_function,merge_msg_join/3}).
 merge_msg_join(#{}, #{handle := NFhandle}, _) ->
+    #{handle => NFhandle}.
+
+-compile({nowarn_unused_function,merge_msg_part/3}).
+merge_msg_part(#{}, #{handle := NFhandle}, _) ->
     #{handle => NFhandle}.
 
 -compile({nowarn_unused_function,merge_msg_chat_msg/3}).
@@ -759,6 +885,7 @@ verify_msg(Msg, MsgName, Opts) ->
     TrUserData = proplists:get_value(user_data, Opts),
     case MsgName of
         join -> v_msg_join(Msg, [MsgName], TrUserData);
+        part -> v_msg_part(Msg, [MsgName], TrUserData);
         chat_msg -> v_msg_chat_msg(Msg, [MsgName], TrUserData);
         state_transfer ->
             v_msg_state_transfer(Msg, [MsgName], TrUserData);
@@ -784,6 +911,25 @@ v_msg_join(M, Path, _TrUserData) when is_map(M) ->
                   Path);
 v_msg_join(X, Path, _TrUserData) ->
     mk_type_error({expected_msg, join}, X, Path).
+
+-compile({nowarn_unused_function,v_msg_part/3}).
+-dialyzer({nowarn_function,v_msg_part/3}).
+v_msg_part(#{handle := F1} = M, Path, TrUserData) ->
+    v_type_string(F1, [handle | Path], TrUserData),
+    lists:foreach(fun (handle) -> ok;
+                      (OtherKey) ->
+                          mk_type_error({extraneous_key, OtherKey}, M, Path)
+                  end,
+                  maps:keys(M)),
+    ok;
+v_msg_part(M, Path, _TrUserData) when is_map(M) ->
+    mk_type_error({missing_fields,
+                   [handle] -- maps:keys(M),
+                   part},
+                  M,
+                  Path);
+v_msg_part(X, Path, _TrUserData) ->
+    mk_type_error({expected_msg, part}, X, Path).
 
 -compile({nowarn_unused_function,v_msg_chat_msg/3}).
 -dialyzer({nowarn_function,v_msg_chat_msg/3}).
@@ -896,6 +1042,9 @@ get_msg_defs() ->
     [{{msg, join},
       [#{name => handle, fnum => 1, rnum => 2, type => string,
          occurrence => required, opts => []}]},
+     {{msg, part},
+      [#{name => handle, fnum => 1, rnum => 2, type => string,
+         occurrence => required, opts => []}]},
      {{msg, chat_msg},
       [#{name => text, fnum => 1, rnum => 2, type => string,
          occurrence => required, opts => []}]},
@@ -905,14 +1054,15 @@ get_msg_defs() ->
          opts => []}]}].
 
 
-get_msg_names() -> [join, chat_msg, state_transfer].
+get_msg_names() ->
+    [join, part, chat_msg, state_transfer].
 
 
 get_group_names() -> [].
 
 
 get_msg_or_group_names() ->
-    [join, chat_msg, state_transfer].
+    [join, part, chat_msg, state_transfer].
 
 
 get_enum_names() -> [].
@@ -931,6 +1081,9 @@ fetch_enum_def(EnumName) ->
 
 
 find_msg_def(join) ->
+    [#{name => handle, fnum => 1, rnum => 2, type => string,
+       occurrence => required, opts => []}];
+find_msg_def(part) ->
     [#{name => handle, fnum => 1, rnum => 2, type => string,
        occurrence => required, opts => []}];
 find_msg_def(chat_msg) ->
@@ -1006,12 +1159,14 @@ service_and_rpc_name_to_fqbins(S, R) ->
 
 
 fqbin_to_msg_name(<<"chat.join">>) -> join;
+fqbin_to_msg_name(<<"chat.part">>) -> part;
 fqbin_to_msg_name(<<"chat.chat_msg">>) -> chat_msg;
 fqbin_to_msg_name(<<"chat.state_transfer">>) -> state_transfer;
 fqbin_to_msg_name(E) -> error({gpb_error, {badmsg, E}}).
 
 
 msg_name_to_fqbin(join) -> <<"chat.join">>;
+msg_name_to_fqbin(part) -> <<"chat.part">>;
 msg_name_to_fqbin(chat_msg) -> <<"chat.chat_msg">>;
 msg_name_to_fqbin(state_transfer) -> <<"chat.state_transfer">>;
 msg_name_to_fqbin(E) -> error({gpb_error, {badmsg, E}}).
@@ -1055,7 +1210,7 @@ get_all_proto_names() -> ["chat"].
 
 
 get_msg_containment("chat") ->
-    [chat_msg, join, state_transfer];
+    [chat_msg, join, part, state_transfer];
 get_msg_containment(P) ->
     error({gpb_error, {badproto, P}}).
 
@@ -1081,6 +1236,7 @@ get_enum_containment(P) ->
 
 
 get_proto_by_msg_name_as_fqbin(<<"chat.state_transfer">>) -> "chat";
+get_proto_by_msg_name_as_fqbin(<<"chat.part">>) -> "chat";
 get_proto_by_msg_name_as_fqbin(<<"chat.chat_msg">>) -> "chat";
 get_proto_by_msg_name_as_fqbin(<<"chat.join">>) -> "chat";
 get_proto_by_msg_name_as_fqbin(E) ->
