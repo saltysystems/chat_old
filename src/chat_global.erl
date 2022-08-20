@@ -70,7 +70,7 @@ send(Msg, Session) ->
 
 % Required callbacks
 init([]) ->
-    InitialState = [],
+    InitialState = #{ msgs => [] },
     {ok, InitialState}.
 
 handle_join(_Msg, Session, _Players, State) ->
@@ -91,7 +91,14 @@ handle_rpc(chat_msg, Msg, Session, Players, State) ->
             false ->
                 State;
             true -> 
-                [ #{ who => ID, msg => Msg } | State ]
+                % get the text of the message sent
+                Text = maps:get(text, Msg),
+                % get the buffer of all msgs
+                Msgs = maps:get(msgs, State, []),
+                % Add this new message along with the ID to the buffer
+                Msgs1 = [ #{id => ID, text => Text} | Msgs ],
+                % Update the state
+                State#{ msgs := Msgs1 }
         end,
     {ok, noreply, State1}.
 
@@ -99,6 +106,6 @@ handle_tick(_Players, State = []) ->
     {ok, noreply, State};
 handle_tick(_Players, State) ->
     % Empty the buffer after sending it to everyone.
-    State1 = [],
+    State1 = #{ msgs => []},
     Reply = {'@zone', {state_transfer, State}},
     {ok, Reply, State1}.
