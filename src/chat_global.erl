@@ -6,7 +6,7 @@
          handle_join/4,
          handle_part/3,
          handle_rpc/5,
-         handle_tick/2,
+         handle_tick/3,
          rpc_info/0
         ]).
 
@@ -33,17 +33,19 @@ rpc_info() ->
         #{
             opcode => ?CHAT_JOIN,
             c2s_handler => {?MODULE, join, 2},
+            s2c_call => join,
             encoder => chat_pb
         },
         #{
             opcode => ?CHAT_PART,
             c2s_handler => {?MODULE, part, 1},
+            s2c_call => part,
             encoder => chat_pb
         },
         #{
             opcode => ?CHAT_SEND,
             c2s_handler => {?MODULE, send, 2},
-            c2s_proto => chat_msg,
+            c2s_proto => privmsg,
             encoder => chat_pb
         },
         #{
@@ -66,46 +68,47 @@ part(Session) ->
     ow_zone:part(?SERVER, Session).
 
 send(Msg, Session) ->
-    ow_zone:rpc(?SERVER, chat_msg, Msg, Session).
+    ow_zone:rpc(?SERVER, privmsg, Msg, Session).
 
 % Required callbacks
 init([]) ->
     InitialState = #{ msgs => [] },
     {ok, InitialState}.
 
-handle_join(_Msg, Session, _Players, State) ->
+handle_join(Msg, Session, _Players, State) ->
     ID = ow_session:get_id(Session),
-    logger:notice("Player ~p has joined the server!", [ID]),
-    {ok, noreply, State}.
+    Handle = maps:get(handle, Msg),
+    Session1 = ow_session:set_game_info(#{handle => Handle}, Session),
+    logger:notice("Player ~p:~p has joined the server!", [Handle,ID]),
+    % Let everyone know that the Player has joined
+    Reply = {'@zone', {join, Msg}},
+    {Reply, {ok, Session1}, State}.
 
 handle_part(Session, _Players, State) ->
     ID = ow_session:get_id(Session),
-    logger:notice("Player ~p has left the server!", [ID]),
-    {ok, noreply, State}.
+    Handle = maps:get(handle, ow_session:get_game_info(Session)),
+    logger:notice("Player ~p:~p has left the server!", [Handle, ID]),
+    % Let everyone know that the Player departed
+    Msg = #{ handle => Handle },
+    Reply = {'@zone', {part, Msg}},
+    {Reply, ok, State}.
 
-handle_rpc(chat_msg, Msg, Session, Players, State) ->
-    ID = ow_session:get_id(Session),
-    % Make sure the player has actually joined the one
-    State1 = 
-        case ow_zone:is_player(ID, Players) of
-            false ->
-                State;
-            true -> 
-                % get the text of the message sent
-                Text = maps:get(text, Msg),
-                % get the buffer of all msgs
-                Msgs = maps:get(msgs, State, []),
-                % Add this new message along with the ID to the buffer
-                Msgs1 = [ #{id => ID, text => Text} | Msgs ],
-                % Update the state
-                State#{ msgs := Msgs1 }
-        end,
-    {ok, noreply, State1}.
+handle_rpc(privmsg, Msg, Session, _Players, State) ->
+    % get the text of the message sent and who sent it
+    Text = maps:get(text, Msg),
+    Handle = maps:get(handle, ow_session:get_game_info(Session)),
+    % Add this new message along with the ID to the buffer
+    Msgs0 = maps:get(msgs, State, []),
+    Msgs1 = [ #{handle => Handle, text => Text} | Msgs0 ],
+    % Update the state
+    State1 = State#{ msgs := Msgs1 },
+    {noreply, ok, State1}.
 
-handle_tick(_Players, State = []) ->
-    {ok, noreply, State};
-handle_tick(_Players, State) ->
+handle_tick(_Players, _TickRate, State = #{ msgs := [] }) ->
+    % If the state is empty, there's nothing to do.
+    {noreply,State};
+handle_tick(_Players, _TickRate, State) ->
+    Reply = {'@zone', {state_transfer, State}},
     % Empty the buffer after sending it to everyone.
     State1 = #{ msgs => []},
-    Reply = {'@zone', {state_transfer, State}},
-    {ok, Reply, State1}.
+    {Reply, State1}.
