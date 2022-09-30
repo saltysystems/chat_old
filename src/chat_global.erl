@@ -15,6 +15,7 @@
          stop/0,
          join/2,
          part/1,
+         list/2,
          send/2
         ]).
 
@@ -27,6 +28,7 @@
 -define(CHAT_PART, 16#1002).
 -define(CHAT_SEND, 16#1003).
 -define(CHAT_XFER, 16#1004).
+-define(CHAT_LIST, 16#1005).
 
 rpc_info() ->
     [
@@ -34,6 +36,13 @@ rpc_info() ->
             opcode => ?CHAT_JOIN,
             c2s_handler => {?MODULE, join, 2},
             s2c_call => join,
+            encoder => chat_pb
+        },
+        #{
+            opcode => ?CHAT_LIST,
+            c2s_handler => {?MODULE, list, 2},
+            c2s_proto => plist,
+            s2c_call => plist,
             encoder => chat_pb
         },
         #{
@@ -67,12 +76,15 @@ join(Msg, Session) ->
 part(Session) ->
     ow_zone:part(?SERVER, Session).
 
+list(Msg, Session) ->
+    ow_zone:rpc(?SERVER, list, Msg, Session).
+
 send(Msg, Session) ->
     ow_zone:rpc(?SERVER, privmsg, Msg, Session).
 
 % Required callbacks
 init([]) ->
-    InitialState = #{ msgs => [] },
+    InitialState = #{ msgs => [], handles => [] },
     {ok, InitialState}.
 
 handle_join(Msg, Session, _Players, State) ->
@@ -80,18 +92,24 @@ handle_join(Msg, Session, _Players, State) ->
     Handle = maps:get(handle, Msg),
     Session1 = ow_session:set_game_info(#{handle => Handle}, Session),
     logger:notice("Player ~p:~p has joined the server!", [Handle,ID]),
+    % Add the handle to our list of handles so the next client can ask for them
+    Handles = maps:get(handles, State), 
+    State1 = State#{ handles => [ Handle | Handles ] },
     % Let everyone know that the Player has joined
     Reply = {'@zone', {join, Msg}},
-    {Reply, {ok, Session1}, State}.
+    {Reply, {ok, Session1}, State1}.
 
 handle_part(Session, _Players, State) ->
     ID = ow_session:get_id(Session),
     Handle = maps:get(handle, ow_session:get_game_info(Session)),
     logger:notice("Player ~p:~p has left the server!", [Handle, ID]),
+    % Remove the handle from our list
+    Handles = maps:get(handles, State),
+    State1 = State#{ handles => lists:delete(Handle, Handles) },
     % Let everyone know that the Player departed
     Msg = #{ handle => Handle },
     Reply = {'@zone', {part, Msg}},
-    {Reply, ok, State}.
+    {Reply, ok, State1}.
 
 handle_rpc(privmsg, Msg, Session, _Players, State) ->
     % get the text of the message sent and who sent it
@@ -102,7 +120,14 @@ handle_rpc(privmsg, Msg, Session, _Players, State) ->
     Msgs1 = [ #{handle => Handle, text => Text} | Msgs0 ],
     % Update the state
     State1 = State#{ msgs := Msgs1 },
-    {noreply, ok, State1}.
+    {noreply, ok, State1};
+handle_rpc(list, _Msg, Session, _Players, State = #{ handles := Handles }) ->
+    logger:notice("players are: ~p", [Handles]),
+    Msg = #{ handles => Handles },
+    P = ow_session:get_id(Session),
+    Reply = {{'@', [P]}, {plist, Msg}},
+    {Reply, ok, State}.
+
 
 handle_tick(_Players, _TickRate, State = #{ msgs := [] }) ->
     % If the state is empty, there's nothing to do.
@@ -110,5 +135,5 @@ handle_tick(_Players, _TickRate, State = #{ msgs := [] }) ->
 handle_tick(_Players, _TickRate, State) ->
     Reply = {'@zone', {state_transfer, State}},
     % Empty the buffer after sending it to everyone.
-    State1 = #{ msgs => []},
+    State1 = State#{ msgs => []},
     {Reply, State1}.

@@ -1,0 +1,25 @@
+syntax = "proto2";
+
+package chat;
+
+message join {
+  required string handle = 1;
+}
+
+message part {
+  required string handle = 1;
+}
+
+message privmsg {
+  required string text = 1;
+  optional string handle = 2;
+}
+
+message state_transfer {
+  repeated privmsg msgs = 1;
+}
+
+// optional implementation. homework problem :)
+message plist {
+  repeated string handles = 1;
+}
