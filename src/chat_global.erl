@@ -3,10 +3,10 @@
 
 -export([
          init/1,
-         handle_join/4,
-         handle_part/3,
-         handle_rpc/5,
-         handle_tick/3,
+         handle_join/3,
+         handle_part/2,
+         handle_rpc/4,
+         handle_tick/2,
          rpc_info/0
         ]).
 
@@ -87,52 +87,51 @@ init([]) ->
     InitialState = #{ msgs => [], handles => [] },
     {ok, InitialState}.
 
-handle_join(Msg, Session, _Players, State) ->
+handle_join(Msg, Session, State) ->
     ID = ow_session:get_id(Session),
     Handle = maps:get(handle, Msg),
-    Session1 = ow_session:set_game_info(#{handle => Handle}, Session),
     logger:notice("Player ~p:~p has joined the server!", [Handle,ID]),
-    % Add the handle to our list of handles so the next client can ask for them
-    Handles = maps:get(handles, State), 
-    State1 = State#{ handles => [ Handle | Handles ] },
+    % Add the handle to the player info
+    PlayerInfo = #{ handle => Handle },
     % Let everyone know that the Player has joined
     Reply = {'@zone', {join, Msg}},
-    {Reply, {ok, Session1}, State1}.
+    {Reply, {ok, Session, PlayerInfo}, State}.
 
-handle_part(Session, _Players, State) ->
+handle_part(Session, State) ->
     ID = ow_session:get_id(Session),
-    Handle = maps:get(handle, ow_session:get_game_info(Session)),
+    Player = ow_player_reg:get(ID),
+    Handle = maps:get(handle, ow_player_reg:get_info(Player)),
     logger:notice("Player ~p:~p has left the server!", [Handle, ID]),
-    % Remove the handle from our list
-    Handles = maps:get(handles, State),
-    State1 = State#{ handles => lists:delete(Handle, Handles) },
     % Let everyone know that the Player departed
     Msg = #{ handle => Handle },
     Reply = {'@zone', {part, Msg}},
-    {Reply, ok, State1}.
+    {Reply, ok, State}.
 
-handle_rpc(privmsg, Msg, Session, _Players, State) ->
+handle_rpc(privmsg, Msg, Session, State) ->
     % get the text of the message sent and who sent it
+    ID = ow_session:get_id(Session),
+    Player = ow_player_reg:get(ID),
+    Handle = maps:get(handle, ow_player_reg:get_info(Player)),
     Text = maps:get(text, Msg),
-    Handle = maps:get(handle, ow_session:get_game_info(Session)),
     % Add this new message along with the ID to the buffer
     Msgs0 = maps:get(msgs, State, []),
     Msgs1 = [ #{handle => Handle, text => Text} | Msgs0 ],
     % Update the state
     State1 = State#{ msgs := Msgs1 },
     {noreply, ok, State1};
-handle_rpc(list, _Msg, Session, _Players, State = #{ handles := Handles }) ->
+handle_rpc(list, _Msg, Session, State) ->
+    Players = ow_player_reg:list(self()),
+    Handles = [ maps:get(handle, ow_player_reg:get_info(P)) || P <- Players ],
     logger:notice("players are: ~p", [Handles]),
     Msg = #{ handles => Handles },
     P = ow_session:get_id(Session),
     Reply = {{'@', [P]}, {plist, Msg}},
     {Reply, ok, State}.
 
-
-handle_tick(_Players, _TickRate, State = #{ msgs := [] }) ->
+handle_tick(_ZoneConfig, State = #{ msgs := [] }) ->
     % If the state is empty, there's nothing to do.
     {noreply,State};
-handle_tick(_Players, _TickRate, State) ->
+handle_tick(_ZoneConfig, State) ->
     Reply = {'@zone', {state_transfer, State}},
     % Empty the buffer after sending it to everyone.
     State1 = State#{ msgs => []},
